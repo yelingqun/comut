@@ -609,6 +609,76 @@ class CoMut:
         self._plots[name] = plot_data
         return None
 
+    def add_scatter_data(self, data, name=None, stacked=False, mapping=None,
+                     ylabel='', scatter_kwargs=None):
+        '''Add a scatter plot to the CoMut object
+
+        Params:
+        -----------
+        data: pandas dataframe
+            Dataframe containing data for samples. The first column must be
+            sample, and other columns should be values for the bar plot.
+
+        name: str
+            The name of the dataset being added. Used to references axes.
+            Defaults to the integer index of the plot being added.
+
+        stacked: bool, default=False
+            Whether the bar graph should be stacked.
+
+        mapping: dict
+            A mapping of column to color. Dictionary should map column name
+            to color (str) or to plot kwargs.
+
+        ylabel: str, default ''
+            The label for the y axis.
+
+        bar_kwargs: dict
+            dict of kwargs to be passed to plt.bar
+
+        Returns:
+        --------
+        None'''
+
+        # check formatting
+        if data.columns[0] != 'sample':
+            raise ValueError('First column in dataframe must be sample')
+
+        # make defaults
+        if name is None:
+            name = len(self._plots)
+
+        if scatter_kwargs is None:
+            scatter_kwargs = {}
+
+        # convert sample to an index
+        bar_df_indexed = data.set_index('sample', drop=True)
+
+        # check that samples are a subset of object samples.
+        samples = list(bar_df_indexed.index)
+        if self.samples is None:
+            self.samples = samples
+        else:
+            self._check_samples(samples)
+
+            # add missing samples and assign 0 value for all columns
+            missing_samples = list(set(self.samples) - set(samples))
+            bar_df_indexed = bar_df_indexed.reindex(self.samples)
+            bar_df_indexed.loc[missing_samples, :] = 0
+
+        # make default mapping
+        if mapping is None:
+            num_cats = len(bar_df_indexed.columns)
+            default_cmap = self._get_default_categorical_cmap(num_cats)
+            mapping = {column: default_cmap[i]
+                       for i, column in enumerate(bar_df_indexed.columns)}
+
+        # store plot data
+        plot_data = {'data': bar_df_indexed, 'scatter_options': mapping, 'type': 'scatter', 'ylabel': ylabel, 'scatter_kwargs': scatter_kwargs}
+
+        self._plots[name] = plot_data
+        return None
+
     def add_sample_indicators(self, data, name=None,
                               plot_kwargs=None):
         '''Add a line plot that indicates samples that share a characteristic
@@ -922,6 +992,80 @@ class CoMut:
         self.axes[name] = ax
         return ax
 
+
+    def _plot_scatter_data(self, ax, data, name, mapping, ylabel, scatter_kwargs):
+        '''Plot bar plot on CoMut plot
+
+        Params:
+        -----------
+        ax: axis object
+            axis object on which to draw the graph.
+
+        data: pandas Dataframe
+            Dataframe from add_scatter_data
+
+        name: str
+            name from add_scatter_data
+
+        mapping: dict
+            mapping from add_scatter_data
+
+        stacked: bool
+            stacked from add_scatter_data
+
+        ylabel: str
+            ylabel from add_scatter_data
+
+        bar_kwargs: dict
+            bar_kwargs from add_scatter_data
+
+        Returns:
+        -------
+        ax: axis object
+            Axis object on which the plot is drawn'''
+
+        # define x range
+        x_range = np.arange(0.5, len(data.index))
+
+        # if stacked, calculate cumulative height of bars
+        if 0:
+            cum_bar_df = np.cumsum(data, axis=1)
+
+            # for each bar, calculate bottom and top of bar and plot it
+            for i in range(len(cum_bar_df.columns)):
+                column = cum_bar_df.columns[i]
+                color = mapping[column]
+                if i == 0:
+                    bottom = None
+                    bar_data = cum_bar_df.loc[:, column]
+                else:
+                    # calculate distance between previous and current column
+                    prev_column = cum_bar_df.columns[i-1]
+                    bar_data = cum_bar_df.loc[:, column] - cum_bar_df.loc[:, prev_column]
+
+                    # the previous column defines the bottom of the bars
+                    bottom = cum_bar_df.loc[:, prev_column]
+
+                # plot bar data
+                ax.scatter(x_range, bar_data, color=color, label=column, **scatter_kwargs)
+
+        # plot unstacked bar. Label is '' to subvert legend.
+        else:
+            color = mapping[data.columns[0]]
+            ax.scatter(x_range, data.iloc[:, 0], color=color, label='', **scatter_kwargs)
+            #test
+            #ax.scatter(x_range, data.iloc[:, 0], color=color, label='')
+
+        # make x axis invisible and despine all axes
+        ax.get_xaxis().set_visible(False)
+        for loc in ['top', 'right', 'bottom', 'left']:
+            ax.spines[loc].set_visible(False)
+
+        # set the ylabel
+        ax.set_ylabel(ylabel)
+        self.axes[name] = ax
+        return ax
+
     def add_side_bar_data(self, data, paired_name, name=None, position='right',
                           mapping=None, stacked=False, xlabel='', bar_kwargs=None):
         '''Add a side bar plot to the CoMut object
@@ -1203,6 +1347,12 @@ class CoMut:
             ax = self._plot_bar_data(ax=ax, data=data, name=plot_name, mapping=mapping,
                                     stacked=stacked, ylabel=ylabel, bar_kwargs=bar_kwargs)
 
+        elif plot_type == 'scatter':
+            mapping = self._plots[plot_name]['scatter_options']
+            ylabel = self._plots[plot_name]['ylabel']
+            scatter_kwargs = self._plots[plot_name]['scatter_kwargs']
+            ax = self._plot_scatter_data(ax=ax, data=data, name=plot_name, mapping=mapping, ylabel=ylabel, scatter_kwargs=scatter_kwargs)
+
         elif plot_type == 'indicator':
             plot_kwargs = self._plots[plot_name]['plot_options']
             ax = self._plot_indicator_data(ax=ax, data=data, name=plot_name, plot_kwargs=plot_kwargs)
@@ -1264,6 +1414,9 @@ class CoMut:
             height = 1
 
         elif plot_type == 'bar':
+            height = 3
+
+        elif plot_type == 'scatter':
             height = 3
 
         elif plot_type == 'indicator':
@@ -1713,7 +1866,7 @@ class CoMut:
             axis = self.axes[name]
             plot_type = plot_data['type']
 
-            if plot_type in ['categorical', 'bar', 'indicator']:
+            if plot_type in ['categorical', 'bar', 'scatter', 'indicator']:
                 # nonstacked bar charts don't need legend labels
                 if plot_type == 'bar' and not plot_data['stacked']:
                     continue
